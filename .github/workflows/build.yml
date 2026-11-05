@@ -1,0 +1,77 @@
+# Builds Recap Studio's server: an AppImage of each edition, Lite and Full Suite, with no window. It's the app
+# from RecapStudio at the tag app-version pins, built by its packaging/linux/build.sh --server. Push a tag like
+# v0.4.0 to publish both as a GitHub release; run it by hand (Actions → Build → Run workflow) to get them as the
+# run's artifacts instead.
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version in the file names (default: 0.0.0-<commit>)"
+        required: false
+
+permissions:
+  contents: write  # to create the release
+
+jobs:
+  server:
+    # the oldest Ubuntu GitHub runs: an AppImage needs a glibc at least as new as the one it's built with
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then v="${REF_NAME#v}"
+          elif [ -n "$INPUT_VERSION" ]; then v="$INPUT_VERSION"
+          else v="0.0.0-${SHA:0:7}"; fi
+          if ! [[ "$v" =~ ^[0-9A-Za-z.-]+$ ]]; then
+            echo "Version '$v' can only have letters, digits, dots and dashes."; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "app=$(tr -d '[:space:]' < app-version)" >> "$GITHUB_OUTPUT"
+
+      - name: The app, at the tag app-version pins
+        uses: actions/checkout@v4
+        with:
+          repository: iEatNoodlez/RecapStudio
+          ref: ${{ steps.version.outputs.app }}
+          path: app
+
+      - name: Build Lite
+        run: bash app/packaging/linux/build.sh "${{ steps.version.outputs.version }}" lite --server
+
+      - name: Build Full Suite
+        run: bash app/packaging/linux/build.sh "${{ steps.version.outputs.version }}" full --server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recap-studio-server-${{ steps.version.outputs.version }}
+          path: app/dist/*.AppImage
+          if-no-files-found: error
+          compression-level: 0  # already compressed
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          APP: ${{ steps.version.outputs.app }}
+        run: |
+          shopt -s nullglob
+          files=(app/dist/*.AppImage)
+          if [ "${#files[@]}" -ne 2 ]; then
+            echo "Expected two files (Lite's and Full Suite's), found ${#files[@]}."; exit 1
+          fi
+          sed -e "s/{version}/$VERSION/g" -e "s/{app}/$APP/g" release-notes.md > notes.md
+          gh release create "$TAG" "${files[@]}" --title "Recap Studio Server $VERSION" --notes-file notes.md
