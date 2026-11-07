@@ -1,0 +1,28 @@
+# Recap Studio Server with Docker Compose: put this file in a folder of its own, then
+#   docker compose up -d
+#   docker logs recap-studio        (the setup code the first visit asks for)
+# and open http://<this machine>:8780/. Updates: docker compose pull, then docker compose up -d.
+services:
+  recap-studio:
+    image: ghcr.io/ieatnoodlez/recap-studio-server:latest   # Full Suite (with Recap Studio's plugins): :latest-full
+    container_name: recap-studio
+    restart: unless-stopped        # (a restart or an update in the app closes it: this starts it again)
+    ports:
+      - "8780:8780"
+    shm_size: 1gb                  # the drawing processes share memory: Docker's 64 MB is too small for 1080p
+    environment:
+      - TZ=Etc/UTC                 # your time zone, for the times the app shows
+      - PUID=1000                  # the user and group it runs as, who owns ./data (Unraid: 99 and 100)
+      - PGID=1000
+    volumes:
+      - ./data:/data               # settings, the login, the voice model, and the projects (data/Recap Studio)
+      # - /mnt/nas/recaps:/recaps  # a NAS share for videos or projects (Settings → Projects folder, or a plugin's
+      #                              folder such as Advanced Cutting's), as /recaps inside it
+    # an NVIDIA card for encoding (NVIDIA's container toolkit on the host):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu, video]

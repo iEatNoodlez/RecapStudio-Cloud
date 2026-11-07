@@ -1,7 +1,8 @@
-# Builds Recap Studio's server: an AppImage of each edition, Lite and Full Suite, with no window. It's the app
-# from RecapStudio at the tag app-version pins, built by its packaging/linux/build.sh --server. Push a tag like
-# v0.4.0 to publish both as a GitHub release; run it by hand (Actions → Build → Run workflow) to get them as the
-# run's artifacts instead.
+# Builds Recap Studio's server: an AppImage of each edition, Lite and Full Suite, with no window and its own glibc,
+# and a Docker image of each (docker/). It's the app from RecapStudio at the tag app-version pins, built by its
+# packaging/linux/build.sh --server. Push a tag like v0.4.0 to publish the AppImages as a GitHub release and the
+# images on GitHub's container registry (ghcr.io/<owner>/recap-studio-server); run it by hand (Actions → Build → Run
+# workflow) to get the AppImages as the run's artifacts instead, the images built and checked but not pushed.
 name: Build
 
 on:
@@ -15,6 +16,7 @@ on:
 
 permissions:
   contents: write  # to create the release
+  packages: write  # to push the images
 
 jobs:
   server:
@@ -53,6 +55,39 @@ jobs:
       - name: Build Full Suite
         run: bash app/packaging/linux/build.sh "${{ steps.version.outputs.version }}" full --server
 
+      - name: They start on Alpine (musl, no glibc) and CentOS 7 (glibc 2.17), without FUSE
+        run: |
+          for system in alpine:3.20 centos:7; do
+            for f in app/dist/*.AppImage; do
+              docker run --rm -v "$PWD/app/dist:/dist:ro" -e F="$(basename "$f")" -e S="$system" "$system" sh -c '
+                cp "/dist/$F" /tmp/a && cd /tmp && ./a --appimage-extract > /dev/null &&
+                squashfs-root/AppRun --version &&
+                squashfs-root/python/bin/python3 -I -c "import cv2, numpy, onnxruntime, soundfile" && echo "$S: $F starts"'
+            done
+          done
+
+      - name: Docker images, each checked
+        id: images
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          IMAGE="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/recap-studio-server"
+          for edition in Lite Full; do
+            suffix=""; [ "$edition" = Full ] && suffix=-full
+            file="Recap-Studio-Server-$edition-$VERSION-x86_64.AppImage"
+            cp "app/dist/$file" docker/
+            docker build --build-arg APPIMAGE="$file" -t "$IMAGE:$VERSION$suffix" -t "$IMAGE:latest$suffix" docker/
+            rm "docker/$file"
+            docker run -d --name check --shm-size 1g -p 127.0.0.1:8780:8780 "$IMAGE:$VERSION$suffix"
+            ok=""
+            for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8780/api/auth && ok=1 && break; sleep 2; done
+            echo; docker logs check 2>&1 | tail -n 5
+            docker rm -f check > /dev/null
+            [ -n "$ok" ] || { echo "The $edition image didn't answer."; exit 1; }
+          done
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: recap-studio-server-${{ steps.version.outputs.version }}
@@ -75,3 +110,17 @@ jobs:
           fi
           sed -e "s/{version}/$VERSION/g" -e "s/{app}/$APP/g" release-notes.md > notes.md
           gh release create "$TAG" "${files[@]}" --title "Recap Studio Server $VERSION" --notes-file notes.md
+
+      - name: Push the images
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          IMAGE: ${{ steps.images.outputs.image }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          for suffix in "" -full; do
+            docker push "$IMAGE:$VERSION$suffix"
+            docker push "$IMAGE:latest$suffix"
+          done

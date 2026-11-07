@@ -1,12 +1,13 @@
 # Recap Studio Server
 
-[Recap Studio](https://github.com/iEatNoodlez/RecapStudio) as a server: the same app, on a Linux machine at home (a NAS, a mini PC, a spare computer), used from a browser on any of your devices. It's one file, an AppImage, with no Docker: it carries its own Python and everything else, runs as a service, sits behind a login and updates itself.
+[Recap Studio](https://github.com/iEatNoodlez/RecapStudio) as a server: the same app, on a Linux machine at home (a NAS, a mini PC, a spare computer), used from a browser on any of your devices. It's one file, an AppImage, that runs on any 64-bit Linux: it carries its own Python, its own C library and everything else, runs as a service, sits behind a login and updates itself. Or run it with Docker: the same server as an image.
 
-It's the app's own code, from its releases, built without the window. This repository holds what makes it a server you install: the install script, the build, and the server's releases.
+It's the app's own code, from its releases, built without the window. This repository holds what makes it a server you install: the install script, the Docker image, the build, and the server's releases.
 
 ## What it needs
 
-- A 64-bit PC (x86-64) running Linux from 2022 or later: Ubuntu 22.04, Debian 12, Fedora 36, or newer (glibc 2.35 or later). The install script also needs systemd, which those all have.
+- A 64-bit PC (x86-64) running any Linux, old or new: the AppImage brings its own C library (glibc 2.35), so it doesn't matter which the system has, or whether it has glibc at all (Alpine's musl). Tried on Ubuntu 18.04, 20.04 and 24.04, Debian 10 and 11, CentOS 7 and Alpine 3.20.
+- The install script needs systemd (Ubuntu, Debian, Fedora and most others have it). Elsewhere (Alpine, a NAS), use [Docker](#with-docker), or start the AppImage from a service of your own.
 - ffmpeg from your distribution is better than the AppImage's own copy, which can't use the graphics card: `sudo apt install ffmpeg` (Fedora: from RPM Fusion). With an NVIDIA card, the videos are then encoded on it.
 - Space: a recap takes several GB.
 
@@ -26,7 +27,21 @@ sudo bash install.sh
 
 Settings, API keys and the voice model go in `/var/lib/recap-studio/recap-studio`. Projects go in `/var/lib/recap-studio/Recap Studio`; Settings → Projects folder moves them.
 
-**Without the script:** download `Recap-Studio-Server-Full-<version>-x86_64.AppImage` (or Lite) from the [Releases](https://github.com/iEatNoodlez/RecapStudio-Cloud/releases), `chmod +x` it and start it. It runs as a server by itself, keeping its data in `~/.local/share/recap-studio`. Start it from a service of your own to keep it running.
+**Without the script:** download `Recap-Studio-Server-Full-<version>-x86_64.AppImage` (or Lite) from the [Releases](https://github.com/iEatNoodlez/RecapStudio-Cloud/releases), `chmod +x` it and start it. It runs as a server by itself, keeping its data in `~/.local/share/recap-studio`. Start it from a service of your own to keep it running. Without FUSE (Alpine, a container), add `--appimage-extract-and-run`: it unpacks itself each time it starts, or `--appimage-extract` once unpacks it into `squashfs-root/`, to start with `squashfs-root/AppRun --server`.
+
+## With Docker
+
+The image is the server AppImage, unpacked, on Debian 12 with Debian's ffmpeg (which can use an NVIDIA card). It runs anywhere Docker does: a NAS's container app (Synology's Container Manager, QNAP's Container Station, Unraid, TrueNAS), Portainer, or `docker compose` on any Linux.
+
+- `ghcr.io/ieatnoodlez/recap-studio-server:latest`: Lite; `:latest-full`: Full Suite. Each release also has its own tags (`:0.4.1`, `:0.4.1-full`).
+- With [`docker/docker-compose.yml`](docker/docker-compose.yml) in a folder of its own: `docker compose up -d`, then `docker logs recap-studio` for the setup code, and open `http://<the machine>:8780/`.
+- **Its data** (settings, the login, the voice model, and the projects in `Recap Studio/`) is in `/data`: keep it on a volume. It runs as `PUID`:`PGID` (1000:1000 unless you set them; Unraid's are 99 and 100), and makes `/data` theirs on its first start.
+- **A NAS share** goes in as a second volume (`/mnt/nas/recaps:/recaps`), then Settings → Projects folder, or a plugin's folder, can use `/recaps`.
+- **`shm_size: 1gb`**, as in the example: the drawing processes share memory, and Docker's 64 MB is too small for 1080p.
+- **Updates** come as a newer image: `docker compose pull`, then `docker compose up -d`. Settings → Updates still tells you when one is out. A restart from the app closes it, and the restart policy (`unless-stopped`) starts it again.
+- **An NVIDIA card** for encoding needs NVIDIA's container toolkit on the machine, and the `deploy:` lines in the example.
+- **Ollama** on the same machine is `http://host.docker.internal:11434` from inside the container (on Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]`).
+- **Claude Code** isn't in the image: use its MCP server from your own computer, below.
 
 ## The first visit
 
@@ -35,6 +50,8 @@ Open `http://<the server>:8780/`. The first visit asks for the **setup code** th
 ```bash
 journalctl -u recap-studio | grep "setup code"
 ```
+
+With Docker: `docker logs recap-studio | grep "setup code"`, or your container app's log.
 
 Then choose a username and password. Every visit after that signs in with them. A browser stays signed in for 30 days. After five wrong passwords, an address has to wait ten minutes.
 
@@ -112,7 +129,7 @@ sudo bash install.sh --uninstall --purge  # those too, and the recap-studio user
 
 ## How it's built
 
-Each release is built by GitHub Actions (`.github/workflows/build.yml`). It runs on Ubuntu 22.04, from RecapStudio at the tag `app-version` names, with that repository's `packaging/linux/build.sh <version> <edition> --server`. That's the desktop AppImage's build without Qt's window, about half the size. Full Suite's plugins are the ones that app release pins.
+Each release is built by GitHub Actions (`.github/workflows/build.yml`). It runs on Ubuntu 22.04, from RecapStudio at the tag `app-version` names, with that repository's `packaging/linux/build.sh <version> <edition> --server`. That's the desktop AppImage's build without Qt's window, about half the size, plus its own C library: the build machine's glibc and the libraries the app needs from outside it, with each of its programs (Python, ffmpeg) started through that glibc's loader (`packaging/linux/own_glibc.sh`). Full Suite's plugins are the ones that app release pins. The workflow then starts both on Alpine to check they run, builds the Docker images from them (`docker/Dockerfile`), checks each answers, and pushes them to GitHub's container registry.
 
 ## License
 

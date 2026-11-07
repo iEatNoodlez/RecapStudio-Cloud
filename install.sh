@@ -45,7 +45,7 @@ say() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf 'Not installed: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run it as root: sudo bash $0"
-command -v systemctl > /dev/null || die "this machine doesn't use systemd; start the AppImage with --server yourself"
+command -v systemctl > /dev/null || die "this machine doesn't use systemd: run it with Docker (the README's With Docker), or start the AppImage with --server from a service of your own"
 
 if [ -n "$UNINSTALL" ]; then
   say "Removing Recap Studio's server"
