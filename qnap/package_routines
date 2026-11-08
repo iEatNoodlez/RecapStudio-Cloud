@@ -1,0 +1,6 @@
+######################################################################
+# Recap Studio Server's install steps, for QDK. QDK's own do everything this package needs: they put shared/
+# (RecapStudio.sh) and the NAS's architecture's folder (x86_64/ or arm_64/: the server AppImage) in the package's
+# folder, and start it. On an update, they replace those files and keep the rest of the folder: data/ (settings,
+# the login), the projects, logs/. The app is unpacked from the AppImage when it starts (RecapStudio.sh).
+######################################################################

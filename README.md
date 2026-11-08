@@ -1,13 +1,13 @@
 # Recap Studio Server
 
-[Recap Studio](https://github.com/iEatNoodlez/RecapStudio) as a server: the same app, on a Linux machine at home (a NAS, a mini PC, a spare computer), used from a browser on any of your devices. It's one file, an AppImage, that runs on any 64-bit Linux: it carries its own Python, its own C library and everything else, runs as a service, sits behind a login and updates itself. Or run it with Docker: the same server as an image.
+[Recap Studio](https://github.com/iEatNoodlez/RecapStudio) as a server: the same app, on a Linux machine at home (a NAS, a mini PC, a spare computer), used from a browser on any of your devices. It's one file, an AppImage, that runs on any 64-bit Linux: it carries its own Python, its own C library and everything else, runs as a service, sits behind a login and updates itself. Or run it with Docker: the same server as an image. On a QNAP NAS, it's a package for App Center.
 
 It's the app's own code, from its releases, built without the window. This repository holds what makes it a server you install: the install script, the Docker image, the build, and the server's releases.
 
 ## What it needs
 
-- A 64-bit PC (x86-64) running any Linux, old or new: the AppImage brings its own C library (glibc 2.35), so it doesn't matter which the system has, or whether it has glibc at all (Alpine's musl). Tried on Ubuntu 18.04, 20.04 and 24.04, Debian 10 and 11, CentOS 7 and Alpine 3.20.
-- The install script needs systemd (Ubuntu, Debian, Fedora and most others have it). Elsewhere (Alpine, a NAS), use [Docker](#with-docker), or start the AppImage from a service of your own.
+- A 64-bit machine running any Linux, old or new: a PC (x86_64), or 64-bit ARM (aarch64: a Raspberry Pi 4 or 5 with the 64-bit Raspberry Pi OS, an ARM NAS, an ARM server). The AppImage brings its own C library (glibc 2.35), so it doesn't matter which the system has, or whether it has glibc at all (Alpine's musl). The x86_64 one was tried on Ubuntu 18.04, 20.04 and 24.04, Debian 10 and 11, CentOS 7 and Alpine 3.20; the ARM one is checked on GitHub's ARM machines (Alpine, CentOS 7, the Docker image) and hasn't been on a Pi yet. 32-bit ARM isn't possible: the libraries the app reads and voices with aren't made for it.
+- The install script needs systemd (Ubuntu, Debian, Fedora and most others have it). Elsewhere (Alpine, a NAS), use [Docker](#with-docker), or start the AppImage from a service of your own. A QNAP NAS has a package of its own: [On a QNAP NAS](#on-a-qnap-nas).
 - ffmpeg from your distribution is better than the AppImage's own copy, which can't use the graphics card: `sudo apt install ffmpeg` (Fedora: from RPM Fusion). With an NVIDIA card, the videos are then encoded on it.
 - Space: a recap takes several GB.
 
@@ -27,13 +27,13 @@ sudo bash install.sh
 
 Settings, API keys and the voice model go in `/var/lib/recap-studio/recap-studio`. Projects go in `/var/lib/recap-studio/Recap Studio`; Settings → Projects folder moves them.
 
-**Without the script:** download `Recap-Studio-Server-Full-<version>-x86_64.AppImage` (or Lite) from the [Releases](https://github.com/iEatNoodlez/RecapStudio-Cloud/releases), `chmod +x` it and start it. It runs as a server by itself, keeping its data in `~/.local/share/recap-studio`. Start it from a service of your own to keep it running. Without FUSE (Alpine, a container), add `--appimage-extract-and-run`: it unpacks itself each time it starts, or `--appimage-extract` once unpacks it into `squashfs-root/`, to start with `squashfs-root/AppRun --server`.
+**Without the script:** download `Recap-Studio-Server-Full-<version>-x86_64.AppImage` (or Lite; `-aarch64` on ARM) from the [Releases](https://github.com/iEatNoodlez/RecapStudio-Cloud/releases), `chmod +x` it and start it. It runs as a server by itself, keeping its data in `~/.local/share/recap-studio`. Start it from a service of your own to keep it running. Without FUSE (Alpine, a container), add `--appimage-extract-and-run`: it unpacks itself each time it starts, or `--appimage-extract` once unpacks it into `squashfs-root/`, to start with `squashfs-root/AppRun --server`.
 
 ## With Docker
 
 The image is the server AppImage, unpacked, on Debian 12 with Debian's ffmpeg (which can use an NVIDIA card). It runs anywhere Docker does: a NAS's container app (Synology's Container Manager, QNAP's Container Station, Unraid, TrueNAS), Portainer, or `docker compose` on any Linux.
 
-- `ghcr.io/ieatnoodlez/recap-studio-server:latest`: Lite; `:latest-full`: Full Suite. Each release also has its own tags (`:0.4.1`, `:0.4.1-full`).
+- `ghcr.io/ieatnoodlez/recap-studio-server:latest`: Lite; `:latest-full`: Full Suite. Each release also has its own tags (`:0.4.1`, `:0.4.1-full`). Each tag holds the image for x86_64 and for 64-bit ARM: Docker pulls your machine's.
 - With [`docker/docker-compose.yml`](docker/docker-compose.yml) in a folder of its own: `docker compose up -d`, then `docker logs recap-studio` for the setup code, and open `http://<the machine>:8780/`.
 - **Its data** (settings, the login, the voice model, and the projects in `Recap Studio/`) is in `/data`: keep it on a volume. It runs as `PUID`:`PGID` (1000:1000 unless you set them; Unraid's are 99 and 100), and makes `/data` theirs on its first start.
 - **A NAS share** goes in as a second volume (`/mnt/nas/recaps:/recaps`), then Settings → Projects folder, or a plugin's folder, can use `/recaps`.
@@ -42,6 +42,29 @@ The image is the server AppImage, unpacked, on Debian 12 with Debian's ffmpeg (w
 - **An NVIDIA card** for encoding needs NVIDIA's container toolkit on the machine, and the `deploy:` lines in the example.
 - **Ollama** on the same machine is `http://host.docker.internal:11434` from inside the container (on Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]`).
 - **Claude Code** isn't in the image: use its MCP server from your own computer, below.
+
+## On a QNAP NAS
+
+A QNAP with QTS 5 or later (or QuTS hero 5 or later) takes the QNAP package, with nothing else installed: no Container Station, no other package. An Intel or AMD model takes the `-x86_64.qpkg`; a 64-bit ARM one (a TS-x33, say) the `-aarch64.qpkg`, which hasn't been tried on an ARM QNAP yet.
+
+1. Download `Recap-Studio-Server-Full-<version>-x86_64.qpkg` (or Lite, or `-aarch64`) from the [Releases](https://github.com/iEatNoodlez/RecapStudio-Cloud/releases).
+2. QNAP doesn't sign it, so let App Center take it: **App Center → Settings (the gear) → General → Allow installation of applications without a valid digital signature**.
+3. **App Center → Install Manually** (the icon beside the gear), and choose the `.qpkg`.
+4. Its first start unpacks the app into the package's folder (about 1 GB), which takes a minute or two. Then **Open** in App Center opens it (port 8780).
+
+The first visit's **setup code** is in QTS's event log (**QuLog Center**, from "Recap Studio Server") and in `logs/recap-studio.log` in the package's folder. Over SSH, as admin, `/etc/init.d/RecapStudio.sh status` shows it as well.
+
+**Why a package of its own:** QTS 5's C library (glibc 2.21, from 2015) is older than the app needs. The package holds the same server AppImage as the other Linux releases, which brings its own glibc, the way MyQNAP's Sonarr package does: the app's programs start through it, and QTS's own keep QTS's.
+
+**Where its files go:** in the package's folder, on the volume you chose (`/share/CACHEDEV1_DATA/.qpkg/RecapStudio`, say): settings, the login and the voice model in `data/recap-studio`, projects in `Recap Studio`, the log in `logs`. To reach the projects over the network, move them to a shared folder with **Settings → Projects folder** (`/share/Multimedia/Recap Studio`, say). **Removing the package in App Center deletes its folder**, with the projects in it if they're still there.
+
+**Updates:** **Settings → Updates → Install** updates the app inside the package, which starts it again. Installing a newer `.qpkg` over it replaces the app and keeps the rest of its folder: settings, the login, projects.
+
+**Options** (`--allow-plugins`, `--port 9000`; see [The AppImage's options](#the-appimages-options)) go in a file named `options` in the package's folder, on one line. Then stop and start it in App Center.
+
+**A forgotten password:** over SSH, as admin, `/etc/init.d/RecapStudio.sh reset-login`, then visit it again with the new setup code.
+
+The package runs as QTS's admin, as App Center's packages do.
 
 ## The first visit
 
@@ -129,7 +152,9 @@ sudo bash install.sh --uninstall --purge  # those too, and the recap-studio user
 
 ## How it's built
 
-Each release is built by GitHub Actions (`.github/workflows/build.yml`). It runs on Ubuntu 22.04, from RecapStudio at the tag `app-version` names, with that repository's `packaging/linux/build.sh <version> <edition> --server`. That's the desktop AppImage's build without Qt's window, about half the size, plus its own C library: the build machine's glibc and the libraries the app needs from outside it, with each of its programs (Python, ffmpeg) started through that glibc's loader (`packaging/linux/own_glibc.sh`). Full Suite's plugins are the ones that app release pins. The workflow then starts both on Alpine to check they run, builds the Docker images from them (`docker/Dockerfile`), checks each answers, and pushes them to GitHub's container registry.
+Each release is built by GitHub Actions (`.github/workflows/build.yml`), for each architecture on a GitHub machine of that kind: Ubuntu 22.04, x86_64 and ARM. It builds from RecapStudio at the tag `app-version` names, with that repository's `packaging/linux/build.sh <version> <edition> --server`. That's the desktop AppImage's build without Qt's window, about half the size, plus its own C library: the build machine's glibc and the libraries the app needs from outside it, with each of its programs (Python, ffmpeg) started through that glibc's loader (`packaging/linux/own_glibc.sh`). Full Suite's plugins are the ones that app release pins. The workflow then starts each on Alpine and CentOS 7 to check they run, builds the Docker images from them (`docker/Dockerfile`), checks each answers, and pushes them to GitHub's container registry, one tag for both architectures.
+
+The QNAP packages are made from those AppImages by `qnap/build-qpkg.sh`, with QNAP's [QDK](https://github.com/qnap-dev/QDK) (`qbuild`), and checked by their bytes (`qnap/check-qpkg.sh`). `qnap/shared/RecapStudio.sh` is the package's service script, which App Center runs: it unpacks the AppImage into the package's folder and keeps the app running.
 
 ## License
 

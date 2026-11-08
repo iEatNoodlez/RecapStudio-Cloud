@@ -1,8 +1,11 @@
-# Builds Recap Studio's server: an AppImage of each edition, Lite and Full Suite, with no window and its own glibc,
-# and a Docker image of each (docker/). It's the app from RecapStudio at the tag app-version pins, built by its
-# packaging/linux/build.sh --server. Push a tag like v0.4.0 to publish the AppImages as a GitHub release and the
-# images on GitHub's container registry (ghcr.io/<owner>/recap-studio-server); run it by hand (Actions → Build → Run
-# workflow) to get the AppImages as the run's artifacts instead, the images built and checked but not pushed.
+# Builds Recap Studio's server for 64-bit PCs (x86_64) and 64-bit ARM (aarch64): an AppImage of each edition, Lite
+# and Full Suite, with no window and its own glibc, and a Docker image of each (docker/). It's the app from
+# RecapStudio at the tag app-version pins, built by its packaging/linux/build.sh --server, each architecture on a
+# GitHub runner of its own kind (ARM's is free for public repositories), and a QNAP package (.qpkg) of each AppImage,
+# made with QNAP's QDK (qnap/). Push a tag like v0.4.0 to publish the AppImages and the packages as a GitHub release
+# and the images on GitHub's container registry (ghcr.io/<owner>/recap-studio-server, one tag for both architectures:
+# Docker pulls the machine's own); run it by hand (Actions → Build → Run workflow) to get the files as the run's
+# artifacts instead, the images built and checked but not pushed.
 name: Build
 
 on:
@@ -19,9 +22,12 @@ permissions:
   packages: write  # to push the images
 
 jobs:
-  server:
-    # the oldest Ubuntu GitHub runs: an AppImage needs a glibc at least as new as the one it's built with
-    runs-on: ubuntu-22.04
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      app: ${{ steps.version.outputs.app }}
+      image: ${{ steps.version.outputs.image }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +38,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           INPUT_VERSION: ${{ inputs.version }}
           SHA: ${{ github.sha }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           if [ "$REF_TYPE" = tag ]; then v="${REF_NAME#v}"
           elif [ -n "$INPUT_VERSION" ]; then v="$INPUT_VERSION"
@@ -41,19 +48,41 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "app=$(tr -d '[:space:]' < app-version)" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/recap-studio-server" >> "$GITHUB_OUTPUT"
+
+  server:
+    needs: version
+    strategy:
+      matrix:
+        include:
+          # the oldest Ubuntu GitHub runs: the glibc the server carries is the build machine's
+          - { runner: ubuntu-22.04, arch: x86_64, platform: amd64 }
+          - { runner: ubuntu-22.04-arm, arch: aarch64, platform: arm64 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      IMAGE: ${{ needs.version.outputs.image }}
+      ARCH: ${{ matrix.arch }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
 
       - name: The app, at the tag app-version pins
         uses: actions/checkout@v4
         with:
           repository: iEatNoodlez/RecapStudio
-          ref: ${{ steps.version.outputs.app }}
+          ref: ${{ needs.version.outputs.app }}
           path: app
 
       - name: Build Lite
-        run: bash app/packaging/linux/build.sh "${{ steps.version.outputs.version }}" lite --server
+        run: bash app/packaging/linux/build.sh "$VERSION" lite --server
 
       - name: Build Full Suite
-        run: bash app/packaging/linux/build.sh "${{ steps.version.outputs.version }}" full --server
+        run: bash app/packaging/linux/build.sh "$VERSION" full --server
+
+      - name: Both are for this architecture
+        run: |
+          for e in Lite Full; do test -f "app/dist/Recap-Studio-Server-$e-$VERSION-$ARCH.AppImage"; done
 
       - name: They start on Alpine (musl, no glibc) and CentOS 7 (glibc 2.17), without FUSE
         run: |
@@ -62,65 +91,118 @@ jobs:
               docker run --rm -v "$PWD/app/dist:/dist:ro" -e F="$(basename "$f")" -e S="$system" "$system" sh -c '
                 cp "/dist/$F" /tmp/a && cd /tmp && ./a --appimage-extract > /dev/null &&
                 squashfs-root/AppRun --version &&
-                squashfs-root/python/bin/python3 -I -c "import cv2, numpy, onnxruntime, soundfile" && echo "$S: $F starts"'
+                squashfs-root/python/bin/python3 -I -c "import cv2, numpy, onnxruntime, soundfile" && echo "$S ($(uname -m)): $F starts"'
             done
           done
 
       - name: Docker images, each checked
-        id: images
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          OWNER: ${{ github.repository_owner }}
         run: |
-          IMAGE="ghcr.io/$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/recap-studio-server"
           for edition in Lite Full; do
             suffix=""; [ "$edition" = Full ] && suffix=-full
-            file="Recap-Studio-Server-$edition-$VERSION-x86_64.AppImage"
+            file="Recap-Studio-Server-$edition-$VERSION-$ARCH.AppImage"
             cp "app/dist/$file" docker/
-            docker build --build-arg APPIMAGE="$file" -t "$IMAGE:$VERSION$suffix" -t "$IMAGE:latest$suffix" docker/
+            docker build --build-arg APPIMAGE="$file" -t "$IMAGE:$VERSION$suffix-$PLATFORM" docker/
             rm "docker/$file"
-            docker run -d --name check --shm-size 1g -p 127.0.0.1:8780:8780 "$IMAGE:$VERSION$suffix"
+            docker run -d --name check --shm-size 1g -p 127.0.0.1:8780:8780 "$IMAGE:$VERSION$suffix-$PLATFORM"
             ok=""
             for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8780/api/auth && ok=1 && break; sleep 2; done
             echo; docker logs check 2>&1 | tail -n 5
             docker rm -f check > /dev/null
-            [ -n "$ok" ] || { echo "The $edition image didn't answer."; exit 1; }
+            [ -n "$ok" ] || { echo "The $edition image ($PLATFORM) didn't answer."; exit 1; }
           done
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: recap-studio-server-${{ steps.version.outputs.version }}
+          name: recap-studio-server-${{ needs.version.outputs.version }}-${{ matrix.arch }}
           path: app/dist/*.AppImage
           if-no-files-found: error
           compression-level: 0  # already compressed
 
-      - name: Release
-        if: github.ref_type == 'tag'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          VERSION: ${{ steps.version.outputs.version }}
-          APP: ${{ steps.version.outputs.app }}
-        run: |
-          shopt -s nullglob
-          files=(app/dist/*.AppImage)
-          if [ "${#files[@]}" -ne 2 ]; then
-            echo "Expected two files (Lite's and Full Suite's), found ${#files[@]}."; exit 1
-          fi
-          sed -e "s/{version}/$VERSION/g" -e "s/{app}/$APP/g" release-notes.md > notes.md
-          gh release create "$TAG" "${files[@]}" --title "Recap Studio Server $VERSION" --notes-file notes.md
-
-      - name: Push the images
+      - name: Push this architecture's images
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
-          IMAGE: ${{ steps.images.outputs.image }}
-          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          for suffix in "" -full; do docker push "$IMAGE:$VERSION$suffix-$PLATFORM"; done
+
+  qnap:
+    # each AppImage in a package for QNAP's App Center (x86_64, and QDK's arm_64 for aarch64), all made here: QDK is
+    # an x86_64 package, and an aarch64 AppImage is unpacked with unsquashfs instead of being run
+    needs: [version, server]
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: recap-studio-server-${{ needs.version.outputs.version }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: QNAP's QDK (qbuild), and squashfs-tools
+        run: |
+          curl -fsSL --retry 3 -o qdk.deb https://github.com/qnap-dev/QDK/releases/download/v2.5.3/qdk_2.5.3_amd64.deb
+          echo "17b3841b7d4590a4ee025844ba583304b5e3c497d9fa8934d5175131d3908022  qdk.deb" | sha256sum -c
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ./qdk.deb squashfs-tools > /dev/null
+
+      - name: The packages, each checked by its bytes
+        run: |
+          mkdir -p qpkg
+          for f in dist/*.AppImage; do sudo bash qnap/build-qpkg.sh "$f" qpkg; done
+          for q in qpkg/*.qpkg; do sh qnap/check-qpkg.sh "$q" "dist/$(basename "${q%.qpkg}").AppImage"; done
+          test "$(ls qpkg/*.qpkg | wc -l)" -eq 4
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recap-studio-server-qnap-${{ needs.version.outputs.version }}
+          path: qpkg/*.qpkg
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, server, qnap]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      IMAGE: ${{ needs.version.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: recap-studio-server-*${{ needs.version.outputs.version }}*
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          APP: ${{ needs.version.outputs.app }}
+        run: |
+          shopt -s nullglob
+          files=(dist/*.AppImage dist/*.qpkg)
+          if [ "${#files[@]}" -ne 8 ]; then
+            echo "Expected eight files (Lite's and Full Suite's AppImage and QNAP package, for x86_64 and aarch64), found ${#files[@]}."
+            exit 1
+          fi
+          sed -e "s/{version}/$VERSION/g" -e "s/{app}/$APP/g" release-notes.md > notes.md
+          gh release create "$TAG" "${files[@]}" --title "Recap Studio Server $VERSION" --notes-file notes.md
+
+      - name: One image tag for both architectures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
         run: |
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           for suffix in "" -full; do
-            docker push "$IMAGE:$VERSION$suffix"
-            docker push "$IMAGE:latest$suffix"
+            docker buildx imagetools create -t "$IMAGE:$VERSION$suffix" -t "$IMAGE:latest$suffix" \
+              "$IMAGE:$VERSION$suffix-amd64" "$IMAGE:$VERSION$suffix-arm64"
+            docker buildx imagetools inspect "$IMAGE:$VERSION$suffix" | grep -E "Name:|Platform:"
           done

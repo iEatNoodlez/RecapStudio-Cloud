@@ -45,6 +45,9 @@ say() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf 'Not installed: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run it as root: sudo bash $0"
+if [ -f /etc/config/uLinux.conf ] && [ -x /sbin/getcfg ]; then  # (QTS: no systemd, and App Center keeps its packages)
+  die "this is a QNAP NAS: install the .qpkg from the releases with App Center instead (the README's On a QNAP NAS)"
+fi
 command -v systemctl > /dev/null || die "this machine doesn't use systemd: run it with Docker (the README's With Docker), or start the AppImage with --server from a service of your own"
 
 if [ -n "$UNINSTALL" ]; then
@@ -63,7 +66,11 @@ if [ -n "$UNINSTALL" ]; then
   exit 0
 fi
 
-[ "$(uname -m)" = x86_64 ] || die "the server is built for 64-bit PCs (x86-64) for now, and this is $(uname -m)"
+ARCH="$(uname -m)"  # (the release's file names use the same words)
+case "$ARCH" in
+  x86_64|aarch64) ;;
+  *) die "the server is built for 64-bit PCs (x86_64) and 64-bit ARM (aarch64), and this is $ARCH" ;;
+esac
 [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "$PORT isn't a port"
 for tool in curl sha256sum python3; do
   command -v "$tool" > /dev/null || die "it needs $tool (install it with your package manager first)"
@@ -72,15 +79,15 @@ done
 say "Finding the latest release"
 case "$EDITION" in full) NAME=Full ;; lite) NAME=Lite ;; esac
 release="$(curl -fsSL -H "Accept: application/vnd.github+json" "$API")" || die "GitHub didn't answer"
-read -r VERSION URL SHA256 < <(printf '%s' "$release" | NAME="$NAME" python3 -c '
+read -r VERSION URL SHA256 < <(printf '%s' "$release" | NAME="$NAME" ARCH="$ARCH" python3 -c '
 import json, os, re, sys
 r = json.load(sys.stdin)
 for a in r.get("assets", []):
-    if re.fullmatch(r"Recap-Studio-Server-%s-.+-x86_64\.AppImage" % os.environ["NAME"], a["name"]):
+    if re.fullmatch(r"Recap-Studio-Server-%s-.+-%s\.AppImage" % (os.environ["NAME"], os.environ["ARCH"]), a["name"]):
         print(r["tag_name"].lstrip("v"), a["browser_download_url"], (a.get("digest") or "").removeprefix("sha256:"))
         break
 ') || true
-[ -n "${URL:-}" ] || die "the latest release has no $NAME server AppImage"
+[ -n "${URL:-}" ] || die "the latest release has no $NAME server AppImage for $ARCH"
 [ -n "${SHA256:-}" ] || die "GitHub lists no checksum for it, so it can't be checked"
 
 say "Downloading Recap Studio Server $NAME $VERSION"

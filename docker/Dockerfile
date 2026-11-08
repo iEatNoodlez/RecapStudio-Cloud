@@ -4,6 +4,8 @@
 #
 #   docker build --build-arg APPIMAGE=Recap-Studio-Server-Lite-0.4.1-x86_64.AppImage -t recap-studio-server docker/
 #
+# On ARM, the -aarch64 AppImage: Debian's image is made for both, and the workflow builds each on its own kind of machine.
+#
 # Its data (settings, the login, projects) is in /data; it listens on 8780; it runs as PUID:PGID (1000:1000 unless
 # they're set). Updates come as a newer image: the app's own updater says so (RECAP_CONTAINER). See
 # docker-compose.yml and the README's "With Docker".
