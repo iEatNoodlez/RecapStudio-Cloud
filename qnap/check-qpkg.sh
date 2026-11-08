@@ -13,7 +13,7 @@ want=$(grep -a -m1 '^offset=$(/usr/bin/expr $offset + ' "$Q" | sed 's/.*+ \([0-9
 [ -n "$sl" ] && [ -n "$want" ] || bad "no unpacking lines in its header"
 off=$((sl + 20480))
 mkdir "$X/c" "$X/d"
-tail -c +$((sl + 1)) "$Q" | head -c 20480 | tar -xO | tar -xz -C "$X/c" || bad "its control files don't unpack"
+tail -c +$((sl + 1)) "$Q" 2> /dev/null | head -c 20480 | tar -xO | tar -xz -C "$X/c" || bad "its control files don't unpack"
 for f in qinstall.sh qpkg.cfg package_routines; do [ -f "$X/c/$f" ] || bad "no $f"; done
 tail -c +$((off + 1)) "$Q" | head -c "$want" > "$X/data.tar.gz"
 [ "$(wc -c < "$X/data.tar.gz")" -eq "$want" ] || bad "its data is shorter than its header says"
