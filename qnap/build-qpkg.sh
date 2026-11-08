@@ -48,13 +48,18 @@ trap 'rm -rf "$W"' EXIT
 echo "== The AppImage"
 D="$W/squashfs-root"
 if [ "$ARCH" = "$(uname -m)" ]; then
-  (cd "$W" && "$APPIMAGE" --appimage-extract > /dev/null)
+  run="$APPIMAGE"
+  if [ ! -x "$run" ]; then  # (a download, such as a workflow's artifact, can lose its execute bit)
+    run="$W/recap-studio.AppImage"; cp "$APPIMAGE" "$run"; chmod 755 "$run"
+  fi
+  (cd "$W" && "$run" --appimage-extract > /dev/null)
 else
   # its squashfs starts where the runtime's ELF ends: after the section headers, which come last
   command -v unsquashfs > /dev/null || { echo "unsquashfs (squashfs-tools) unpacks an $ARCH AppImage here"; exit 1; }
   u() { od -An -tu"$1" -j"$2" -N"$1" "$APPIMAGE" | tr -d ' \n'; }
   off=$(( $(u 8 40) + $(u 2 58) * $(u 2 60) ))
-  [ "$(tail -c +$((off + 1)) "$APPIMAGE" | head -c 4)" = hsqs ] || { echo "No squashfs at $off in $(basename "$APPIMAGE")"; exit 1; }
+  [ "$(dd if="$APPIMAGE" bs=1 skip="$off" count=4 2> /dev/null)" = hsqs ] ||
+    { echo "No squashfs at $off in $(basename "$APPIMAGE")"; exit 1; }
   unsquashfs -no-progress -quiet -o "$off" -d "$D" "$APPIMAGE" > /dev/null
 fi
 [ -f "$D/SERVER" ] || { echo "$(basename "$APPIMAGE") isn't the server AppImage (build.sh --server)"; exit 1; }
